@@ -1,0 +1,36 @@
+# OpenSearch Dashboards with the Maps plugin's opening view changed.
+#
+# Why this exists: the Maps plugin in 2.18 builds its map from a hardcoded
+# constant and never reads zoom or centre back out of the saved object, so a
+# map always opens on the whole world no matter what you save. There is no
+# setting for it. This patches the constant in the built browser bundle.
+#
+# Defaults below are south-east Australia, matching the Logstash pipeline's
+# area of interest and the tile grid. Override at build time:
+#
+#   docker compose build --build-arg MAP_ZOOM=6 opensearch-dashboards
+#
+FROM opensearchproject/opensearch-dashboards:2.18.0
+
+ARG MAP_LNG=147.5
+ARG MAP_LAT=-34.0
+ARG MAP_ZOOM=5
+
+USER root
+RUN set -eux; \
+    d=/usr/share/opensearch-dashboards/plugins/customImportMapDashboards/target/public; \
+    f="$d/customImportMapDashboards.plugin.js"; \
+    old='MAP_INITIAL_STATE={lng:0,lat:0,zoom:1}'; \
+    new="MAP_INITIAL_STATE={lng:${MAP_LNG},lat:${MAP_LAT},zoom:${MAP_ZOOM}}"; \
+    # Fail the build rather than silently do nothing if the upstream bundle
+    # changes shape, which it will on a version bump.
+    grep -q "$old" "$f"; \
+    sed -i "s/$old/$new/" "$f"; \
+    grep -q "$new" "$f"; \
+    # The plugin ships precompressed bundles and Dashboards serves those in
+    # preference to the plain .js. Without removing them the patch has no
+    # effect at all, because the browser never sees the file we edited.
+    rm -f "$f.br" "$f.gz"; \
+    echo "patched opening view -> lng=${MAP_LNG} lat=${MAP_LAT} zoom=${MAP_ZOOM}"
+
+USER 1000

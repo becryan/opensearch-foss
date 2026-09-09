@@ -1,0 +1,13 @@
+# Use OpenSearch Logstash image with OpenSearch output plugin
+FROM opensearchproject/logstash-oss-with-opensearch-output-plugin:8.4.0
+
+# No additional plugins needed - using built-in Ruby filter for GeoJSON processing
+# The pipeline configuration handles GeoJSON transformation natively
+
+# Set working directory
+WORKDIR /usr/share/logstash
+
+# Switch to logstash user
+USER logstash
+
+# The pipeline configuration will be mounted as a volume at runtime
