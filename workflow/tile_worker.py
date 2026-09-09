@@ -22,6 +22,7 @@ seconds, and run "run" in a terminal beside it.
 """
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -54,11 +55,11 @@ class OpenSearch:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        handler = urllib.request.HTTPSHandler(context=ctx)
-        mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-        mgr.add_password(None, self.url, user, password)
         self.opener = urllib.request.build_opener(
-            handler, urllib.request.HTTPBasicAuthHandler(mgr))
+            urllib.request.HTTPSHandler(context=ctx))
+        # Sent up front rather than relying on a 401 challenge.
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        self.opener.addheaders = [("Authorization", f"Basic {token}")]
 
     def request(self, method, path, body=None, ndjson=False):
         data = None
