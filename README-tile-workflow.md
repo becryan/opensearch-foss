@@ -67,33 +67,6 @@ ERROR.
 
 Turn it off with `--no-logs`. `reset` clears the log along with the tiles.
 
-## Dashboards as files
-
-Both dashboards live in `dashboards/*.ndjson`, plain files in the repo, so they
-are versioned with the code rather than only inside a Docker volume.
-
-    ./demo/dashboards-import.sh      # load them (setup.sh already does this)
-    ./demo/dashboards-export.sh      # write UI changes back to the files
-
-Rearrange or rebuild anything in the browser, run the export, and commit the
-result. Import uses `overwrite=true` and fixed object ids, so it is safe to
-re-run and never creates duplicates.
-
-The export handles every dashboard, each into its own file. Pass a dashboard id
-to do just one:
-
-    ./demo/dashboards-export.sh tile-workflow-overview
-
-A panel you remove in the UI stops being referenced by the dashboard, but the
-visualisation itself is still kept in the file, since losing it from the repo
-because it spent a moment off a dashboard is rarely what you want. Pass
-`--prune` when you do mean to drop it.
-
-`configs/opensearch_dashboards.yml` is mounted and turns multi-tenancy off. The
-Dashboards image defaults to `tenants.preferred: [Private, Global]`, so the
-browser opens in your private tenant while an API import lands in the global
-one. The result is an import that reports success and a UI that shows nothing.
-Turning tenancy off gives a single saved-object store.
 
 ## Making a map open zoomed in
 
