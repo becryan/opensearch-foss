@@ -5,18 +5,21 @@
 # map always opens on the whole world no matter what you save. There is no
 # setting for it. This patches the constant in the built browser bundle.
 #
-# Defaults below are south-east Australia, matching the Logstash pipeline's
-# area of interest and the tile grid. Override at build time:
+# Defaults are south-east Australia, matching the Logstash pipeline's area of
+# interest and the tile grid. Override at build time:
 #
-#   docker compose build --build-arg MAP_ZOOM=6 opensearch-dashboards
+#   docker compose build --build-arg MAP_ZOOM=4 opensearch-dashboards
+#   docker compose up -d opensearch-dashboards
 #
 FROM opensearchproject/opensearch-dashboards:2.18.0
 
 ARG MAP_LNG=147.5
 ARG MAP_LAT=-34.0
-ARG MAP_ZOOM=5
+ARG MAP_ZOOM=3
 
 USER root
+
+# 1. Patch the opening view into the browser bundle.
 RUN set -eux; \
     d=/usr/share/opensearch-dashboards/plugins/customImportMapDashboards/target/public; \
     f="$d/customImportMapDashboards.plugin.js"; \
@@ -32,5 +35,23 @@ RUN set -eux; \
     # effect at all, because the browser never sees the file we edited.
     rm -f "$f.br" "$f.gz"; \
     echo "patched opening view -> lng=${MAP_LNG} lat=${MAP_LAT} zoom=${MAP_ZOOM}"
+
+# 2. Bust the browser cache.
+#
+# Bundles are served from /<buildNumber>/bundles/... with
+# cache-control: max-age=31536000, a year. Patching a bundle does not change
+# its URL, so a browser that has already loaded the page keeps the old copy
+# and your change appears to do nothing at all.
+#
+# Deriving the build number from the patched values gives every distinct
+# opening view its own URL, so a rebuild busts the cache by itself. Identical
+# builds keep the same number, so nothing churns needlessly.
+RUN set -eux; \
+    p=/usr/share/opensearch-dashboards/package.json; \
+    bn=$(printf '%s:%s:%s' "${MAP_LNG}" "${MAP_LAT}" "${MAP_ZOOM}" | cksum | cut -d' ' -f1); \
+    grep -qE '"number": *[0-9]+' "$p"; \
+    sed -i -E "s/\"number\": *[0-9]+/\"number\": ${bn}/" "$p"; \
+    grep -q "\"number\": ${bn}" "$p"; \
+    echo "build number -> ${bn} (bundle URLs become /${bn}/bundles/...)"
 
 USER 1000

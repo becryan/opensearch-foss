@@ -23,30 +23,54 @@ services:
     ports:
       - 9200:9200 # REST API
       - 9600:9600 # Performance Analyzer
+    healthcheck:
+      # Logstash waits on this, otherwise the first poll is lost to a refused connection
+      test: ["CMD-SHELL", "curl -ks -u admin:$${OPENSEARCH_INITIAL_ADMIN_PASSWORD} https://localhost:9200/_cluster/health | grep -q '\"status\"'"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 40s
     networks:
       - opensearch-net # All of the containers will join the same Docker bridge network
   opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:2.18.0 # Make sure the version of opensearch-dashboards matches the version of opensearch installed on other nodes
+    # Built from Dockerfile.dashboards, which patches the Maps plugin so a map
+    # opens over south-east Australia instead of the whole world. Revert to the
+    # plain image by swapping build: for image: on the line below.
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboards
+    image: opensearch-foss/opensearch-dashboards:2.18.0-zoomed
     container_name: opensearch-dashboards
+    depends_on:
+      opensearch-node:
+        condition: service_healthy
     ports:
       - 5601:5601 # Map host port 5601 to container port 5601
     expose:
       - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
-    environment:
-      OPENSEARCH_HOSTS: '["https://opensearch-node:9200"]' # Define the OpenSearch nodes that OpenSearch Dashboards will query
-      #DISABLE_SECURITY_DASHBOARDS_PLUGIN: 'True'
+    volumes:
+      # Sets opensearch.hosts and turns multi-tenancy off, so an imported
+      # dashboard is visible in the UI rather than stranded in another tenant.
+      - ./configs/opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml:ro
     networks:
       - opensearch-net
 
   logstash:
     image: opensearchproject/logstash-oss-with-opensearch-output-plugin:8.4.0
-    ports:
-    - "5044:5044"
-    expose:
-    - "5044"
+    container_name: logstash
+    depends_on:
+      opensearch-node:
+        condition: service_healthy
+    environment:
+      # Used by the opensearch output in pipeline/pipeline.conf so the password
+      # is not committed in the pipeline file.
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
+      - LS_JAVA_OPTS=-Xms512m -Xmx512m
+      - PIPELINE_ECS_COMPATIBILITY=disabled
     volumes:
     - ./pipeline:/usr/share/logstash/pipeline
-  #  - ./input_files:/input_files
+    - ./templates:/usr/share/logstash/templates
+    - ./ruby:/usr/share/logstash/ruby
     networks:
     - opensearch-net
   #data-prepper:

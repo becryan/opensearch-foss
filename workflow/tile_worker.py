@@ -34,14 +34,48 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 
 INDEX = "tile-workflow"
+LOGS_INDEX = "tile-workflow-logs"
 SCENES_INDEX = "satellite-metadata"
-TEMPLATE = os.path.join(os.path.dirname(__file__), "..", "templates",
-                        "tile-workflow-template.json")
+_TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
+TEMPLATES = {
+    INDEX: os.path.join(_TEMPLATE_DIR, "tile-workflow-template.json"),
+    LOGS_INDEX: os.path.join(_TEMPLATE_DIR, "tile-workflow-logs-template.json"),
+}
 
 # South-east Australia, matching the area the Logstash pipeline harvests.
 DEFAULT_BBOX = (141.0, -39.0, 154.0, -28.0)   # west, south, east, north
 
 STATUS_CODES = {"pending": 0, "running": 1, "complete": 2, "failed": 3}
+
+# The kinds of thing that actually go wrong in a tiled raster job. error_type is
+# the stable code to aggregate on; the message is the human sentence, which
+# embeds a path or a number and so makes a poor aggregation key.
+FAILURES = [
+    ("source_asset_unreadable",
+     "HTTP 404 fetching s3://sentinel-cogs/{tile}/B04.tif",
+     "3 of 12 assets missing; the granule may have been reprocessed upstream"),
+    ("reprojection_failed",
+     "gdalwarp could not compute output bounds for EPSG:32755 to EPSG:3577",
+     "source has no geotransform and no ground control points"),
+    ("worker_out_of_memory",
+     "worker killed: resident set 4.2 GiB exceeded the 4.0 GiB limit",
+     "tile holds {scenes} scenes; consider a smaller tile or streaming reads"),
+    ("checksum_mismatch",
+     "MD5 mismatch on downloaded asset for tile {tile}",
+     "expected 265e47eccfb7f08c, got 9f1a02b4c7de5510"),
+    ("upstream_timeout",
+     "tile exceeded its 300 second budget and was cancelled",
+     "last log line was 'reading band 8A' 291 seconds in"),
+]
+
+# Not everything worth logging is a failure. These keep the log stream
+# realistic rather than a wall of identical INFO lines.
+WARNINGS = [
+    "cloud cover 93% exceeds the 80% threshold, continuing anyway",
+    "2 of {scenes} scenes have no thumbnail asset",
+    "scene footprint only partially covers the tile, edges will be nodata",
+    "retrying asset fetch after a 503 from the source catalogue",
+]
 
 
 # --------------------------------------------------------------------------
@@ -149,10 +183,37 @@ def count_scenes_per_tile(os_client, tiles):
 # Commands
 # --------------------------------------------------------------------------
 
-def ensure_template(os_client):
-    with open(TEMPLATE) as f:
-        body = json.load(f)
-    os_client.request("PUT", f"/_index_template/{INDEX}", body)
+def ensure_templates(os_client):
+    for name, path in TEMPLATES.items():
+        with open(path) as f:
+            os_client.request("PUT", f"/_index_template/{name}", json.load(f))
+
+
+class Log:
+    """Buffers log lines and bulk-writes them, so a long run does not make one
+    request per line but the dashboard still updates while it is running."""
+
+    def __init__(self, os_client, run_id, worker, enabled=True, flush_every=20):
+        self.os, self.run_id, self.worker = os_client, run_id, worker
+        self.enabled, self.flush_every = enabled, flush_every
+        self.buf = []
+
+    def emit(self, level, event, message, **fields):
+        if not self.enabled:
+            return
+        doc = {"@timestamp": iso(now()), "run_id": self.run_id,
+               "worker": self.worker, "level": level, "event": event,
+               "message": message}
+        doc.update({k: v for k, v in fields.items() if v is not None})
+        self.buf.append(json.dumps({"index": {"_index": LOGS_INDEX}}) + "\n")
+        self.buf.append(json.dumps(doc) + "\n")
+        if len(self.buf) >= self.flush_every * 2:
+            self.flush()
+
+    def flush(self):
+        if self.buf:
+            bulk(self.os, self.buf)
+            self.buf = []
 
 
 def doc_id(run_id, tile_id):
@@ -171,7 +232,7 @@ def bulk(os_client, lines):
 
 
 def cmd_seed(os_client, args):
-    ensure_template(os_client)
+    ensure_templates(os_client)
     tiles = build_grid(args.bbox, args.tile_size)
     print(f"grid: {len(tiles)} tiles of {args.tile_size} degrees over {args.bbox}")
 
@@ -209,6 +270,11 @@ def cmd_seed(os_client, args):
                                            "_id": doc_id(args.run_id, t["tile_id"])}}) + "\n")
         lines.append(json.dumps(doc) + "\n")
     bulk(os_client, lines)
+    log = Log(os_client, args.run_id, args.worker, enabled=not args.no_logs)
+    log.emit("INFO", "run_seeded",
+             f"seeded {len(tiles)} tiles of {args.tile_size} degrees; "
+             f"{with_work} have scenes, {len(tiles) - with_work} skipped")
+    log.flush()
     print(f"seeded run '{args.run_id}': {with_work} tiles to do, "
           f"{len(tiles) - with_work} skipped (no scenes)")
 
@@ -240,42 +306,67 @@ def cmd_run(os_client, args):
     print(f"processing {len(todo)} tiles at ~{args.rate}/s "
           f"(failure rate {args.fail_rate:.0%})")
     rng = random.Random(args.seed_value)
+    log = Log(os_client, args.run_id, args.worker, enabled=not args.no_logs)
+    log.emit("INFO", "run_started",
+             f"run started over {len(todo)} pending tiles")
     done = failed = 0
 
     for i, tile in enumerate(todo, start=1):
         tid = tile["tile_id"]
+        scenes = tile.get("scenes_in_tile", 0)
+        attempt = tile.get("attempts", 0) + 1
         started = now()
         update(os_client, args.run_id, tid, {
             "status": "running", "status_code": STATUS_CODES["running"],
             "started_at": iso(started), "@timestamp": iso(started),
-            "attempts": tile.get("attempts", 0) + 1, "worker": args.worker,
+            "attempts": attempt, "worker": args.worker,
         })
+        log.emit("INFO", "tile_started",
+                 f"processing {scenes} scenes intersecting tile {tid}",
+                 tile_id=tid, attempt=attempt, scenes_in_tile=scenes)
+
+        # A warning now and then, so the log is not a wall of identical lines.
+        if rng.random() < 0.18:
+            log.emit("WARN", "tile_warning",
+                     rng.choice(WARNINGS).format(scenes=scenes, tile=tid),
+                     tile_id=tid, attempt=attempt, scenes_in_tile=scenes)
 
         # Stand-in for the actual per-tile processing. Bigger tiles take longer,
         # which is usually true and makes the map fill in unevenly.
-        work = (1.0 / max(args.rate, 0.01)) * (0.5 + min(tile.get("scenes_in_tile", 1), 20) / 20.0)
+        work = (1.0 / max(args.rate, 0.01)) * (0.5 + min(scenes, 20) / 20.0)
         time.sleep(work)
 
         finished = now()
+        elapsed = int((finished - started).total_seconds() * 1000)
         patch = {
             "finished_at": iso(finished), "@timestamp": iso(finished),
-            "duration_ms": int((finished - started).total_seconds() * 1000),
+            "duration_ms": elapsed,
         }
         if rng.random() < args.fail_rate:
+            code, message, detail = rng.choice(FAILURES)
+            message = message.format(tile=tid, scenes=scenes)
+            detail = detail.format(tile=tid, scenes=scenes)
             patch.update({"status": "failed", "status_code": STATUS_CODES["failed"],
-                          "is_complete": 0,
-                          "error": rng.choice(["source asset unreadable",
-                                               "reprojection failed",
-                                               "worker out of memory"])})
+                          "is_complete": 0, "error": code})
+            log.emit("ERROR", "tile_failed", message, tile_id=tid,
+                     error_type=code, detail=detail, attempt=attempt,
+                     duration_ms=elapsed, scenes_in_tile=scenes)
             failed += 1
         else:
             patch.update({"status": "complete", "status_code": STATUS_CODES["complete"],
                           "is_complete": 1})
+            log.emit("INFO", "tile_complete",
+                     f"tile {tid} written in {elapsed} ms", tile_id=tid,
+                     attempt=attempt, duration_ms=elapsed, scenes_in_tile=scenes)
             done += 1
         update(os_client, args.run_id, tid, patch)
 
         if i % 10 == 0 or i == len(todo):
             print(f"  {i}/{len(todo)}  complete={done} failed={failed}")
+
+    log.emit("ERROR" if failed else "INFO", "run_finished",
+             f"run finished: {done} complete, {failed} failed")
+    log.flush()
 
     print(f"run '{args.run_id}' finished: {done} complete, {failed} failed")
     if failed:
@@ -290,7 +381,11 @@ def cmd_retry(os_client, args):
                                  "ctx._source.status_code=0; "
                                  "ctx._source.error=null"}}
     res = os_client.request("POST", f"/{INDEX}/_update_by_query?refresh=true", body)
-    print(f"requeued {res.get('updated', 0)} failed tiles as pending")
+    n = res.get("updated", 0)
+    log = Log(os_client, args.run_id, args.worker, enabled=not args.no_logs)
+    log.emit("WARN", "retry_requeued", f"requeued {n} failed tiles as pending")
+    log.flush()
+    print(f"requeued {n} failed tiles as pending")
 
 
 def cmd_status(os_client, args):
@@ -331,6 +426,10 @@ def cmd_reset(os_client, args):
     body = {"query": {"term": {"run_id": args.run_id}}}
     res = os_client.request("POST", f"/{INDEX}/_delete_by_query?refresh=true", body)
     print(f"deleted {res.get('deleted', 0)} tile documents from run '{args.run_id}'")
+    logs = os_client.request(
+        "POST", f"/{LOGS_INDEX}/_delete_by_query?refresh=true&ignore_unavailable=true",
+        body)
+    print(f"deleted {logs.get('deleted', 0)} log lines from run '{args.run_id}'")
 
 
 # --------------------------------------------------------------------------
@@ -376,6 +475,8 @@ def main(argv):
                    help="fraction of tiles that fail, to exercise the retry path")
     p.add_argument("--seed-value", type=int, default=7,
                    help="random seed, so a rehearsal is repeatable")
+    p.add_argument("--no-logs", action="store_true",
+                   help="do not write log lines to " + LOGS_INDEX)
     args = p.parse_args(argv)
 
     client = OpenSearch(args.url, args.user, load_env())
