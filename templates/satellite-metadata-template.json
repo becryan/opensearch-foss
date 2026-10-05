@@ -1,0 +1,70 @@
+{
+  "index_patterns": ["satellite-metadata", "satellite-metadata-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": false,
+
+      "properties": {
+        "@timestamp":       { "type": "date" },
+
+        "scene_id":         { "type": "keyword" },
+        "source":           { "type": "keyword" },
+        "source_format":    { "type": "keyword" },
+        "collection":       { "type": "keyword" },
+        "title": {
+          "type": "text",
+          "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+        },
+
+        "platform":         { "type": "keyword" },
+        "constellation":    { "type": "keyword" },
+        "instrument":       { "type": "keyword" },
+        "processing_level": { "type": "keyword" },
+
+        "datetime":         { "type": "date" },
+        "cloud_cover":      { "type": "float" },
+
+        "geometry": {
+          "type": "geo_shape",
+          "orientation": "right",
+          "ignore_malformed": true
+        },
+        "centroid": {
+          "type": "geo_point",
+          "ignore_malformed": true
+        },
+        "bbox":             { "type": "float" },
+
+        "ingest_notes":       { "type": "keyword" },
+        "quarantine_reasons": { "type": "keyword" },
+
+        "raw_platform":          { "type": "keyword" },
+        "raw_datetime":          { "type": "keyword" },
+        "raw_cloud_cover":       { "type": "keyword" },
+        "raw_geometry_encoding": { "type": "keyword" },
+
+        "tags": { "type": "keyword" },
+
+        "source_properties": {
+          "type": "object",
+          "enabled": false
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Canonical satellite scene metadata, normalised from several public catalogues.",
+    "notes": [
+      "dynamic:false is deliberate. Source catalogues disagree on the type of identically named properties, so anything the normaliser did not explicitly map is kept in _source but never indexed. That is what stops a mapping conflict from taking the index down.",
+      "source_properties is enabled:false for the same reason - retrievable per document, invisible to the mapper.",
+      "geometry uses ignore_malformed so one self-intersecting footprint cannot reject a whole bulk request. Check ingest_notes and the quarantine index for what was skipped.",
+      "raw_* fields keep the original messy values so a single query can show before and after."
+    ]
+  }
+}

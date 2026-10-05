@@ -1,0 +1,51 @@
+{
+  "index_patterns": ["geojson-*"],
+  "priority": 1,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "30s"
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "geo_shape": {
+          "type": "geo_shape"
+        },
+        "location": {
+          "type": "geo_point"
+        },
+        "feature_type": {
+          "type": "keyword"
+        },
+        "feature_id": {
+          "type": "keyword"
+        },
+        "stac_item": {
+          "type": "keyword"
+        },
+        "collection": {
+          "type": "keyword"
+        },
+        "datetime": {
+          "type": "date"
+        },
+        "properties": {
+          "type": "object",
+          "dynamic": true
+        },
+        "assets": {
+          "type": "object",
+          "enabled": false
+        },
+        "links": {
+          "type": "object",
+          "enabled": false
+        }
+      }
+    }
+  }
+}
