@@ -1,0 +1,45 @@
+{
+  "index_patterns": ["tile-workflow-logs", "tile-workflow-logs-*"],
+  "priority": 250,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "1s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":  { "type": "date" },
+        "run_id":      { "type": "keyword" },
+        "tile_id":     { "type": "keyword" },
+        "worker":      { "type": "keyword" },
+
+        "level":       { "type": "keyword" },
+        "event":       { "type": "keyword" },
+
+        "message": {
+          "type": "text",
+          "fields": { "keyword": { "type": "keyword", "ignore_above": 512 } }
+        },
+        "error_type":  { "type": "keyword" },
+        "detail": {
+          "type": "text",
+          "fields": { "keyword": { "type": "keyword", "ignore_above": 1024 } }
+        },
+
+        "attempt":        { "type": "integer" },
+        "duration_ms":    { "type": "long" },
+        "scenes_in_tile": { "type": "integer" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Append-only log lines emitted by workflow/tile_worker.py.",
+    "notes": [
+      "Separate from tile-workflow, which holds current state per tile. This index is an event log: one document per thing that happened, never updated.",
+      "message is text with a keyword subfield, so it is readable in a saved search and still aggregatable when you want to count identical lines.",
+      "error_type is the stable machine-readable code. message is the human sentence, which may embed a path or a number and so makes a poor aggregation key."
+    ]
+  }
+}
