@@ -1,0 +1,54 @@
+{
+  "index_patterns": ["tile-workflow", "tile-workflow-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "refresh_interval": "1s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":  { "type": "date" },
+
+        "run_id":      { "type": "keyword" },
+        "tile_id":     { "type": "keyword" },
+
+        "tile_lon":    { "type": "integer" },
+        "tile_lat":    { "type": "integer" },
+        "tile_size_deg": { "type": "float" },
+
+        "geometry": {
+          "type": "geo_shape",
+          "orientation": "right",
+          "ignore_malformed": true
+        },
+        "centroid": { "type": "geo_point", "ignore_malformed": true },
+
+        "status":      { "type": "keyword" },
+        "status_code": { "type": "integer" },
+        "is_complete": { "type": "integer" },
+
+        "scenes_in_tile": { "type": "integer" },
+
+        "queued_at":   { "type": "date" },
+        "started_at":  { "type": "date" },
+        "finished_at": { "type": "date" },
+        "duration_ms": { "type": "long" },
+
+        "attempts":    { "type": "integer" },
+        "worker":      { "type": "keyword" },
+        "error":       { "type": "keyword" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "One document per tile per run of a tiled/batch processing geospatial workflow.",
+    "notes": [
+      "status is the human label; status_code (0 pending, 1 running, 2 complete, 3 failed) and is_complete (0/1) exist because a chart needs a number to colour by.",
+      "tile_lon and tile_lat are the tile's south-west corner. They are the axes of the completion heat map, which is why they are integers rather than a geo type.",
+      "Documents are updated in place as the workflow progresses, keyed on run_id plus tile_id, so the dashboard shows current state rather than an event log."
+    ]
+  }
+}
