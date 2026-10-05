@@ -48,10 +48,20 @@ services:
       - 5601:5601 # Map host port 5601 to container port 5601
     expose:
       - "5601" # Expose port 5601 for web access to OpenSearch Dashboards
-    volumes:
-      # Sets opensearch.hosts and turns multi-tenancy off, so an imported
-      # dashboard is visible in the UI rather than stranded in another tenant.
-      - ./configs/opensearch_dashboards.yml:/usr/share/opensearch-dashboards/config/opensearch_dashboards.yml:ro
+    environment:
+      # The image's own config points at localhost, which inside the container
+      # is the container itself.
+      OPENSEARCH_HOSTS: '["https://opensearch-node:9200"]'
+    # Multi-tenancy has no environment variable: the entrypoint only maps an
+    # allowlist of config keys to flags, and no opensearch_security.* key is on
+    # it. Passing the flag directly works because the entrypoint prepends the
+    # binary whenever the first argument starts with a dash.
+    #
+    # It matters because the image defaults to tenants.preferred [Private,
+    # Global]. The browser then opens in your private tenant while an API import
+    # lands in the global one, so demo/dashboards-import.sh reports success and
+    # the UI shows nothing.
+    command: ["--opensearch_security.multitenancy.enabled=false"]
     networks:
       - opensearch-net
 
