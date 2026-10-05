@@ -1,24 +1,28 @@
-# ---------------------------------------------------------------------------
-#  Satellite metadata ingest: adapters and normaliser, in one file.
+# Four catalogues, four different ways of describing the same thing.
 #
-#  Four public catalogues answer the same question in four different shapes.
-#  This file turns all of them into one canonical document.
+# Footprints turn up as GeoJSON, as WKT strings, or as a run of latitude-first
+# numbers. The acquisition time sits under a different key in each one. Two of
+# them don't name the satellite anywhere, so you have to dig it out of the
+# filename.
 #
-#    adapt_stac / adapt_cmr / adapt_copernicus
-#        One per catalogue. They only PLUCK values into [raw][...] staging
-#        fields. They do no cleaning, no parsing and no guessing.
+# There are two halves to this file.
 #
-#    normalise
-#        The only place anything is cleaned. Mission names, dates, cloud cover
-#        and four geometry encodings, for every source alike.
+# The adapt_* functions handle one catalogue each. They grab values and drop
+# them under [raw][...], and that's it - no cleaning, no parsing. If a catalogue
+# renames a field, this is the only place to change.
 #
-#    filter
-#        Logstash's entry point. Picks the adapter from the event's tags, then
-#        runs the normaliser.
+# normalise does the actual work, once, for all of them. One name per satellite,
+# dates parsed, cloud cover turned into a number (one of them sends it as text),
+# and every geometry encoding folded down to a single geo_shape. Anything it
+# fixes gets written to ingest_notes so you can see what happened to a document
+# later. Anything it can't make sense of goes to the quarantine index rather
+# than being dropped.
 #
-#  Adding a catalogue means writing one more adapt_* function and one more
-#  branch in filter. Nothing else changes.
-# ---------------------------------------------------------------------------
+# filter is the bit Logstash calls - it checks the tags, picks the adapter, then
+# runs normalise.
+#
+# Adding a fifth catalogue is one more adapt_* function and one more branch in
+# filter.
 
 require "digest"
 require "time"

@@ -24,35 +24,118 @@ scene metadata the workflow counts against, and imports the dashboards.
     docker compose up -d
     ./demo/setup.sh
 
-**3. Open the dashboard**, `admin` and your `.env` password. It auto-refreshes
-every 5 seconds.
+**3. Open the dashboard**, with `admin` and your `.env` password. It restores a
+relative time range and auto-refreshes every 5 seconds.
 
     http://localhost:5601/app/dashboards#/view/tile-workflow-overview
 
-**4. Run the workflow beside it** and watch the tiles turn green.
+**4. Run the tile processing workflow in a terminal as a separate process**, and watch tiles turn green as they process to completion:
 
     ./workflow/tile_worker.py seed
     ./workflow/tile_worker.py run
-
-## Other commands
-
-    ./workflow/tile_worker.py status    # text summary
-    ./workflow/tile_worker.py retry     # requeue the failures
-    ./workflow/tile_worker.py reset     # start over
-
-About 8 percent of tiles fail on purpose, so the failure table, the log and the
-retry path all have something in them. `--fail-rate 0` for a clean run.
-
-Rearranged the dashboard and want to keep it? `./demo/dashboards-export.sh`
-writes it back to `dashboards/*.ndjson` so you can commit it.
 
 If nothing appears, check `docker compose ps` and re-run `./demo/setup.sh`,
 which is safe to repeat. Step 2 needs network access because the scene
 catalogues are live public APIs; everything after that works offline.
 
-## Docs
+## What the workflow does
 
-- [README-tile-workflow.md](README-tile-workflow.md) - how it works, what the
-  dashboard panels mean, and the traps worth knowing.
-  example, which produces the scene data step 2 ingests.
-- [links-FOSS.md](links-FOSS.md) - links from the talk.
+`workflow/tile_worker.py` is an external application that points at OpenSearch
+and does two things a real processing pipeline might do:
+
+1. Asks OpenSearch where the work is. It lays a grid over the area of interest
+   and counts, in one `filters` aggregation with a `geo_shape` filter per tile,
+   how many indexed scenes intersect each tile.
+2. Writes one document per tile and updates it in place as the tile moves from
+   pending to running to complete or failed, so a dashboard can show the grid
+   filling in while the job runs.
+
+The default grid is 1 degree tiles over south-east Australia, which is 143
+tiles. Tiles with no scenes are marked `skipped` rather than left pending
+forever. A run takes a couple of minutes at the default rate.
+
+About 8 percent of tiles fail on purpose, so the failure table, the log and the
+retry path all have something in them. `--fail-rate 0` for a clean run.
+
+    ./workflow/tile_worker.py status    # text summary
+    ./workflow/tile_worker.py retry     # requeue only the failures
+    ./workflow/tile_worker.py reset     # start over
+
+Other options: `--tile-size` in degrees, `--bbox west,south,east,north`,
+`--rate` tiles per second, `--run-id` to keep several runs side by side, and
+`--seed-value` so a rehearsal repeats exactly.
+
+    workflow/tile_worker.py                     the workflow itself
+    templates/tile-workflow-template.json       mapping for tile progress
+    templates/tile-workflow-logs-template.json  mapping for the event log
+    dashboards/tile-workflow.ndjson             the dashboard, as a file
+
+## The dashboard
+
+Panels: tile count, fraction complete, status donut, a failed-tile table, the
+completion grid, a throughput chart on `finished_at`, the tile map, a failure
+causes table, and the log itself.
+
+Rearranged it and want to keep the change? `./demo/dashboards-export.sh` writes
+it back to `dashboards/*.ndjson` so you can commit it.
+
+### Two ways the same completion is drawn
+
+The **completion grid** is a heat map whose axes are the tile's longitude and
+latitude. It reads as a map, but because it is a plain chart it needs no basemap
+tiles, always frames itself on the data, and never opens at the wrong zoom. This
+is the panel to demo on venue wifi.
+
+The **tile map** is the real thing: actual tile polygons as `geo_shape`, with one
+layer per status so complete is green, failed red, running amber, pending grey
+and skipped pale. It opens over south-east Australia thanks to the patched image
+described under [Making a map open zoomed in](#making-a-map-open-zoomed-in).
+
+### The log
+
+The worker writes an event log to `tile-workflow-logs`, separate from
+`tile-workflow`. The two indices earn their separation: `tile-workflow` is
+current state, one document per tile, updated in place; the log is append-only,
+one document per thing that happened.
+
+The dashboard shows it through a saved search, so it reads like a log rather
+than a chart. Type `level: ERROR` in the dashboard query bar to cut it down to
+failures. A typical run produces a few hundred lines across INFO, WARN and
+ERROR.
+
+Turn it off with `--no-logs`. `reset` clears the log along with the tiles.
+
+### Making a map open zoomed in
+
+`Dockerfile.dashboards` patches a zoom-level constant in the built browser
+bundle, which is why the maps open over south-east Australia at zoom 3. To
+change it, edit the `ARG MAP_ZOOM` default or override it for one build:
+
+    docker compose build --build-arg MAP_ZOOM=4 opensearch-dashboards
+    docker compose up -d opensearch-dashboards
+
+This is a patch of vendored code (OpenSearch Dashboards 2.18.0) and should be
+checked on upgrade. To go back to stock, swap `build:` for
+`image: opensearchproject/opensearch-dashboards:2.18.0` in `docker-compose.yml`.
+
+The base map tiles come from `tiles.maps.opensearch.org` and
+`maps.opensearch.org`, so the map panels need internet even though the data does
+not. Without it the tiles still draw, just on a blank background.
+
+## Resetting
+
+    docker compose down                  # keep the indexed data
+    docker compose down -v               # throw the data away too
+
+To re-run just the workflow without touching the scene index:
+
+    ./workflow/tile_worker.py reset
+    ./workflow/tile_worker.py seed
+    ./workflow/tile_worker.py run
+
+## Also in this repo
+
+- [README-satellite-metadata.md](README-satellite-metadata.md) - the second
+  example: ingesting satellite metadata from four distinct public catalogues into
+  one clean index. It produces the scene data that step 2 ingests.
+- [links-FOSS.md](links-FOSS.md) - links given at my FOSS4G Oceania 2025 talk
