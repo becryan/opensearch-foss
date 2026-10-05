@@ -41,6 +41,27 @@ Panels: tile count, fraction complete, status donut, a failed-tile table, the
 completion grid, a throughput chart on `finished_at`, the tile map, a failure
 causes table, and the log itself.
 
+![The tile workflow dashboard just after a run: a grid of green tiles over
+south-east Australia with two red failures, a fraction complete of 0.93 across
+143 tiles, a status donut at 93% complete, tables of failed tiles and failure
+causes, and the event log](images/tiled-workflow.png)
+
+That is a finished run: 133 tiles complete, 10 failed, and 316 log lines. A few
+things in it are worth pointing at.
+
+The tooltip is a single tile, `E152_S34`, showing `scenes_in_tile` and
+`duration_ms` straight off the document, because the map is drawing real
+`geo_shape` polygons rather than a picture of them.
+
+`upstream_timeout` accounts for 7 of the 10 failures, which is the Failure
+causes table aggregating `error_type` rather than `message`. The log beside it
+shows the same events in full, including a `tile_warning` about retrying an
+asset fetch after a 503.
+
+The basemap is visible through the tiles. That is the low layer opacity doing
+its job: the grid covers the area of interest edge to edge, so a solid fill
+would hide the coastline entirely.
+
 ## Two ways the same completion is drawn
 
 The **completion grid** is a heat map whose axes are the tile's longitude and
